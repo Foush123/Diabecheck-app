@@ -14,6 +14,7 @@ import '../features/onboarding/onboarding_screen.dart';
 import '../features/auth/welcome_screen.dart';
 import '../features/auth/login_screen.dart';
 import '../features/auth/signup_screen.dart';
+import '../features/auth/health_questionnaire_screen.dart';
 import '../features/shell/shell_screen.dart';
 
 /// AppRouter - Handles all route generation and navigation logic
@@ -47,6 +48,10 @@ class AppRouter {
       // Signup screen - New user registration
       case SignupScreen.routeName:
         return MaterialPageRoute(builder: (_) => const SignupScreen());
+      
+      // Health questionnaire screen - Collects health information during signup
+      case HealthQuestionnaireScreen.routeName:
+        return MaterialPageRoute(builder: (_) => const HealthQuestionnaireScreen());
       
       // Main shell - Contains bottom navigation and main app screens
       case ShellScreen.routeName:

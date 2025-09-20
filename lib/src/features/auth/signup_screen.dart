@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'login_screen.dart';
+import 'health_questionnaire_screen.dart';
 
 class SignupScreen extends StatefulWidget {
   static const String routeName = '/signup';
@@ -26,7 +26,7 @@ class _SignupScreenState extends State<SignupScreen> {
 
   void _submit() {
     if (_formKey.currentState?.validate() ?? false) {
-      Navigator.of(context).pushReplacementNamed(LoginScreen.routeName);
+      Navigator.of(context).pushNamed(HealthQuestionnaireScreen.routeName);
     }
   }
 
