@@ -107,6 +107,112 @@ enum MealType {
   snacks     // Light meals between main meals
 }
 
+/// CommunityPost - Social post in the community feed
+///
+/// Minimal model to support text posts with optional image and category.
+class CommunityPost {
+  final String id;
+  final String userId;
+  final String userName;
+  final String category; // e.g. Questions/Advice/Success Story/Support
+  final String content;
+  final String? imageUrl;
+  final DateTime createdAt;
+  final int likesCount;
+  final int commentsCount;
+  final bool isLikedByMe;
+
+  const CommunityPost({
+    required this.id,
+    required this.userId,
+    required this.userName,
+    required this.category,
+    required this.content,
+    required this.createdAt,
+    this.imageUrl,
+    this.likesCount = 0,
+    this.commentsCount = 0,
+    this.isLikedByMe = false,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'userId': userId,
+    'userName': userName,
+    'category': category,
+    'content': content,
+    'imageUrl': imageUrl,
+    'createdAt': createdAt.toIso8601String(),
+    'likesCount': likesCount,
+    'commentsCount': commentsCount,
+  };
+
+  factory CommunityPost.fromDoc(String id, Map<String, dynamic> j) => CommunityPost(
+    id: id,
+    userId: j['userId'] as String? ?? '',
+    userName: j['userName'] as String? ?? 'User',
+    category: j['category'] as String? ?? 'All',
+    content: j['content'] as String? ?? '',
+    imageUrl: j['imageUrl'] as String?,
+    createdAt: (() {
+      final v = j['createdAt'];
+      if (v is String) return DateTime.tryParse(v) ?? DateTime.now();
+      try {
+        // Firestore Timestamp
+        if (v != null && v.toString().contains('Timestamp')) {
+          final seconds = (v.seconds as int?) ?? 0;
+          final nanos = (v.nanoseconds as int?) ?? 0;
+          return DateTime.fromMillisecondsSinceEpoch(seconds * 1000 + (nanos ~/ 1000000));
+        }
+      } catch (_) {}
+      return DateTime.now();
+    })(),
+    likesCount: (j['likesCount'] as num?)?.toInt() ?? 0,
+    commentsCount: (j['commentsCount'] as num?)?.toInt() ?? 0,
+  );
+}
+
+class PostComment {
+  final String id;
+  final String userId;
+  final String userName;
+  final String text;
+  final DateTime createdAt;
+
+  const PostComment({
+    required this.id,
+    required this.userId,
+    required this.userName,
+    required this.text,
+    required this.createdAt,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'userId': userId,
+    'userName': userName,
+    'text': text,
+    'createdAt': createdAt.toIso8601String(),
+  };
+
+  factory PostComment.fromDoc(String id, Map<String, dynamic> j) => PostComment(
+    id: id,
+    userId: j['userId'] as String? ?? '',
+    userName: j['userName'] as String? ?? 'User',
+    text: j['text'] as String? ?? '',
+    createdAt: (() {
+      final v = j['createdAt'];
+      if (v is String) return DateTime.tryParse(v) ?? DateTime.now();
+      try {
+        if (v != null && v.toString().contains('Timestamp')) {
+          final seconds = (v.seconds as int?) ?? 0;
+          final nanos = (v.nanoseconds as int?) ?? 0;
+          return DateTime.fromMillisecondsSinceEpoch(seconds * 1000 + (nanos ~/ 1000000));
+        }
+      } catch (_) {}
+      return DateTime.now();
+    })(),
+  );
+}
+
 /// Meal - Represents a complete meal with nutritional information
 /// 
 /// This comprehensive model stores all meal-related data including

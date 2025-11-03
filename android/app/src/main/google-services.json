@@ -1,0 +1,42 @@
+{
+  "project_info": {
+    "project_number": "459229782877",
+    "firebase_url": "https://diabecheck-app-default-rtdb.firebaseio.com",
+    "project_id": "diabecheck-app",
+    "storage_bucket": "diabecheck-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:459229782877:android:5b1c49410a4d637d097eb4",
+        "android_client_info": {
+          "package_name": "com.company.diabecheck"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "459229782877-s4ljhq17pq2pn146gh5holqcqevsmpce.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDvSUIGIDKxfb6nFVB7-_wfA1l3jfUR4K8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "459229782877-s4ljhq17pq2pn146gh5holqcqevsmpce.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
+
+

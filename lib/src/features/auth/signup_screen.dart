@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'health_questionnaire_screen.dart';
 
 class SignupScreen extends StatefulWidget {
@@ -15,6 +17,7 @@ class _SignupScreenState extends State<SignupScreen> {
   final _email = TextEditingController();
   final _password = TextEditingController();
   bool _obscure = true;
+  bool _loading = false;
 
   @override
   void dispose() {
@@ -24,9 +27,62 @@ class _SignupScreenState extends State<SignupScreen> {
     super.dispose();
   }
 
-  void _submit() {
-    if (_formKey.currentState?.validate() ?? false) {
+  Future<void> _submit() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    setState(() => _loading = true);
+    try {
+      final cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(
+        email: _email.text.trim(),
+        password: _password.text,
+      );
+      if (_name.text.trim().isNotEmpty) {
+        await cred.user?.updateDisplayName(_name.text.trim());
+      }
+      final user = cred.user;
+      if (user != null) {
+        try {
+          final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+          await userDoc.set({
+            'displayName': _name.text.trim(),
+            'email': user.email,
+            'createdAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Signed up, but profile save will retry later: $e')),
+            );
+          }
+        }
+      }
+      if (!mounted) return;
       Navigator.of(context).pushNamed(HealthQuestionnaireScreen.routeName);
+    } on FirebaseAuthException catch (e) {
+      final message = _mapAuthError(e);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), backgroundColor: Colors.red),
+      );
+    } catch (_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sign up failed. Please try again.'), backgroundColor: Colors.red),
+      );
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  String _mapAuthError(FirebaseAuthException e) {
+    switch (e.code) {
+      case 'email-already-in-use':
+        return 'This email is already in use.';
+      case 'invalid-email':
+        return 'Invalid email address.';
+      case 'weak-password':
+        return 'Password is too weak.';
+      case 'operation-not-allowed':
+        return 'Email/password sign-in is disabled.';
+      default:
+        return 'Auth error: ${e.code}';
     }
   }
 
@@ -73,10 +129,12 @@ class _SignupScreenState extends State<SignupScreen> {
                 ),
                 const SizedBox(height: 16),
                 ElevatedButton(
-                  onPressed: _submit,
+                  onPressed: _loading ? null : _submit,
                   style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(50), shape: const StadiumBorder(),backgroundColor: Theme.of(context).colorScheme.primary,
                     foregroundColor: Theme.of(context).colorScheme.surface,),
-                  child: const Text('Sigan Up'),
+                  child: _loading
+                      ? const SizedBox(height: 22, width: 22, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Text('Sign Up'),
                 ),
                 const SizedBox(height: 50),
                 ],

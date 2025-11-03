@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../features/logging/logging_sheets.dart';
 import 'package:percent_indicator/percent_indicator.dart';
+import '../../services/user_data_service.dart';
+import '../../services/notification_service.dart';
 
 class Reminder {
   final String id;
@@ -24,18 +28,219 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final List<Reminder> _reminders = [
-    Reminder(
-      id: '1',
-      title: 'Medicine',
-      time: '8:00 AM',
-      isCompleted: false,
-    ),
-  ];
+  Future<String> _loadDisplayName() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return 'User';
+    final authName = user.displayName;
+    try {
+      final snap = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      final data = snap.data();
+      final name = (data != null ? data['displayName'] as String? : null);
+      return name?.isNotEmpty == true ? name! : (authName?.isNotEmpty == true ? authName! : 'User');
+    } catch (_) {
+      return authName?.isNotEmpty == true ? authName! : 'User';
+    }
+  }
+
+  void _showTodayMeals() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.6,
+          minChildSize: 0.4,
+          maxChildSize: 0.9,
+          builder: (context, scrollController) {
+            return Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Today\'s Meals', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: StreamBuilder<List<Map<String, dynamic>>>(
+                      stream: UserDataService.instance.streamTodayMealLogs(),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState == ConnectionState.waiting) {
+                          return const Center(child: CircularProgressIndicator());
+                        }
+                        final items = snapshot.data ?? const [];
+                        if (items.isEmpty) {
+                          return const Center(child: Text('No meals logged today'));
+                        }
+                        return ListView.separated(
+                          controller: scrollController,
+                          itemBuilder: (context, i) {
+                            final m = items[i];
+                            return ListTile(
+                              leading: const Icon(Icons.restaurant_outlined),
+                              title: Text((m['name'] ?? '') as String),
+                              subtitle: Text('Calories: ${(m['calories'] ?? 0)}  •  Carbs: ${(m['carbs'] ?? 0)}g'),
+                            );
+                          },
+                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          itemCount: items.length,
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<double> _loadRiskPercent() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return 0.0;
+    final doc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('profiles')
+        .doc('health_questionnaire')
+        .get();
+    if (!doc.exists) return 0.0;
+    final data = doc.data() ?? {};
+    final explicit = data['riskPercent'];
+    if (explicit is num) {
+      final p = explicit.toDouble();
+      return p.clamp(0.0, 1.0);
+    }
+    final score = data['diabetesRiskScore'];
+    if (score is num) {
+      return (score.toDouble() / 10).clamp(0.0, 1.0);
+    }
+    return 0.0;
+  }
+
+  CollectionReference<Map<String, dynamic>>? _remindersCollection() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return null;
+    return FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('reminders');
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>>? _remindersStream() {
+    final col = _remindersCollection();
+    if (col == null) return null;
+    return col.orderBy('createdAt', descending: true).snapshots();
+  }
+
+  Stream<int>? _pendingCountStream() {
+    final col = _remindersCollection();
+    if (col == null) return null;
+    return col.where('isCompleted', isEqualTo: false).snapshots().map((s) => s.size);
+  }
+
+  DateTime _parseNextDateForTime(String timeStr) {
+    // expects e.g., "8:00 AM" via TimeOfDay.format
+    final now = DateTime.now();
+    final regex = RegExp(r'^(\d{1,2}):(\d{2})\s*(AM|PM)$', caseSensitive: false);
+    final m = regex.firstMatch(timeStr.trim());
+    if (m == null) return now.add(const Duration(minutes: 1));
+    int hour = int.parse(m.group(1)!);
+    final minute = int.parse(m.group(2)!);
+    final ampm = m.group(3)!.toUpperCase();
+    if (ampm == 'PM' && hour != 12) hour += 12;
+    if (ampm == 'AM' && hour == 12) hour = 0;
+    var scheduled = DateTime(now.year, now.month, now.day, hour, minute);
+    if (scheduled.isBefore(now)) {
+      scheduled = scheduled.add(const Duration(days: 1));
+    }
+    return scheduled;
+  }
+
+  Future<void> _scheduleReminderNotification(String docId, String title, String time) async {
+    final when = _parseNextDateForTime(time);
+    final id = docId.hashCode & 0x7fffffff; // ensure positive int
+    await NotificationService.instance.scheduleReminder(
+      id: id,
+      title: 'Reminder',
+      body: title,
+      whenLocal: when,
+    );
+  }
+
+  Future<void> _cancelReminderNotification(String docId) async {
+    final id = docId.hashCode & 0x7fffffff;
+    await NotificationService.instance.cancel(id);
+  }
+
+  Future<void> _addReminder(String title, String time) async {
+    final col = _remindersCollection();
+    if (col == null) return;
+    final doc = await col.add({
+      'title': title,
+      'time': time,
+      'isCompleted': false,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+    await _scheduleReminderNotification(doc.id, title, time);
+  }
+
+  Future<void> _toggleReminder(String id, bool current) async {
+    final col = _remindersCollection();
+    if (col == null) return;
+    await col.doc(id).update({'isCompleted': !current});
+    if (current) {
+      // transitioning from completed -> active: schedule
+      final snap = await col.doc(id).get();
+      final data = snap.data();
+      if (data != null) {
+        await _scheduleReminderNotification(id, (data['title'] ?? '') as String, (data['time'] ?? '') as String);
+      }
+    } else {
+      // transitioning to completed: cancel
+      await _cancelReminderNotification(id);
+    }
+  }
+
+  Future<void> _deleteReminder(String id) async {
+    final col = _remindersCollection();
+    if (col == null) return;
+    await _cancelReminderNotification(id);
+    await col.doc(id).delete();
+  }
+
+  Future<List<Reminder>> _fetchPendingReminders() async {
+    final col = _remindersCollection();
+    if (col == null) return [];
+    final qs = await col.where('isCompleted', isEqualTo: false).limit(50).get();
+    final items = qs.docs.map((d) {
+      final data = d.data();
+      return {
+        'id': d.id,
+        'title': (data['title'] ?? '') as String,
+        'time': (data['time'] ?? '') as String,
+        'isCompleted': (data['isCompleted'] ?? false) as bool,
+        'createdAt': data['createdAt'],
+      };
+    }).toList();
+    items.sort((a, b) {
+      final ta = a['createdAt'];
+      final tb = b['createdAt'];
+      final da = ta is Timestamp ? ta.toDate() : DateTime.fromMillisecondsSinceEpoch(0);
+      final db = tb is Timestamp ? tb.toDate() : DateTime.fromMillisecondsSinceEpoch(0);
+      return db.compareTo(da);
+    });
+    return items.map((m) => Reminder(
+      id: m['id'] as String,
+      title: m['title'] as String,
+      time: m['time'] as String,
+      isCompleted: m['isCompleted'] as bool,
+    )).toList();
+  }
 
   void _showAddReminderDialog(BuildContext context) {
     final titleController = TextEditingController();
-    final timeController = TextEditingController();
     TimeOfDay selectedTime = TimeOfDay.now();
 
     showDialog(
@@ -61,7 +266,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
                 if (time != null) {
                   selectedTime = time;
-                  timeController.text = time.format(context);
                 }
               },
               child: InputDecorator(
@@ -80,17 +284,10 @@ class _HomeScreenState extends State<HomeScreen> {
             child: const Text('Cancel'),
           ),
           ElevatedButton(
-            onPressed: () {
+            onPressed: () async {
               if (titleController.text.isNotEmpty) {
-                setState(() {
-                  _reminders.add(Reminder(
-                    id: DateTime.now().millisecondsSinceEpoch.toString(),
-                    title: titleController.text,
-                    time: selectedTime.format(context),
-                    isCompleted: false,
-                  ));
-                });
-                Navigator.pop(context);
+                await _addReminder(titleController.text, selectedTime.format(context));
+                if (context.mounted) Navigator.pop(context);
               }
             },
             child: const Text('Add'),
@@ -100,16 +297,18 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _showNotificationPopup(BuildContext context) {
-    final hasNotifications = _reminders.any((r) => !r.isCompleted);
+  void _showNotificationPopup(BuildContext context) async {
+    final pending = await _fetchPendingReminders();
+    final hasNotifications = pending.isNotEmpty;
     
+    // ignore: use_build_context_synchronously
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         contentPadding: const EdgeInsets.all(24),
         content: hasNotifications 
-          ? _NotificationContent(reminders: _reminders.where((r) => !r.isCompleted).toList())
+          ? _NotificationContent(reminders: pending)
           : _EmptyNotificationContent(),
         actions: [
           TextButton(
@@ -131,14 +330,49 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         automaticallyImplyLeading: false,
         centerTitle: true,
-        title: Column(children: [
-          Text('Hello, Ahmed', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-          Text('Today ${DateTime.now().day} ${_monthName(DateTime.now().month)} ${DateTime.now().year}', style: Theme.of(context).textTheme.bodySmall),
-        ]),
+        title: FutureBuilder<String>(
+          future: _loadDisplayName(),
+          builder: (context, snapshot) {
+            final name = snapshot.data ?? 'User';
+            return Column(children: [
+              Text('Hello, $name', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+              Text('Today ${DateTime.now().day} ${_monthName(DateTime.now().month)} ${DateTime.now().year}', style: Theme.of(context).textTheme.bodySmall),
+            ]);
+          },
+        ),
         actions: [
-          IconButton(
-            onPressed: () => _showNotificationPopup(context),
-            icon: const Icon(Icons.notifications_outlined),
+          StreamBuilder<int>(
+            stream: _pendingCountStream(),
+            builder: (context, snapshot) {
+              final count = snapshot.data ?? 0;
+              return Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  IconButton(
+                    onPressed: () => _showNotificationPopup(context),
+                    icon: const Icon(Icons.notifications_outlined),
+                  ),
+                  if (count > 0)
+                    Positioned(
+                      right: 8,
+                      top: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.red,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        constraints: const BoxConstraints(minWidth: 18),
+                        child: Text(
+                          count > 99 ? '99+' : '$count',
+                          style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
           ),
         ],
       ),
@@ -155,7 +389,13 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           child: Column(
         children: [
-              _riskCard(context, percent: 0.63, isTablet: isTablet),
+              FutureBuilder<double>(
+                future: _loadRiskPercent(),
+                builder: (context, snapshot) {
+                  final percent = snapshot.data ?? 0.0;
+                  return _riskCard(context, percent: percent, isTablet: isTablet);
+                },
+              ),
               SizedBox(height: isTablet ? 24 : 16),
               
               // Quick Actions Section
@@ -171,37 +411,43 @@ class _HomeScreenState extends State<HomeScreen> {
               _buildDailyOverview(context, isTablet, isDesktop),
               SizedBox(height: isTablet ? 24 : 16),
               
-              // Reminders Section
+              // Reminders Section (from Firestore)
               Text('Reminders', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
               const SizedBox(height: 8),
-              ..._reminders.map((reminder) => Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: _ReminderCard(
-                  icon: Icons.notifications_outlined,
-                  time: reminder.time,
-                  title: reminder.title,
-                  isCompleted: reminder.isCompleted,
-                  onTap: () {
-                    setState(() {
-                      final index = _reminders.indexWhere((r) => r.id == reminder.id);
-                      if (index != -1) {
-                        final oldReminder = _reminders[index];
-                        _reminders[index] = Reminder(
-                          id: oldReminder.id,
-                          title: oldReminder.title,
-                          time: oldReminder.time,
-                          isCompleted: !oldReminder.isCompleted,
-                        );
-                      }
-                    });
-                  },
-                  onDelete: () {
-                    setState(() {
-                      _reminders.removeWhere((r) => r.id == reminder.id);
-                    });
-                  },
-                ),
-              )).toList(),
+              StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: _remindersStream(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Padding(
+                      padding: EdgeInsets.all(12),
+                      child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                    );
+                  }
+                  final docs = snapshot.data?.docs ?? [];
+                  return Column(
+                    children: docs.map((d) {
+                      final data = d.data();
+                      final reminder = Reminder(
+                        id: d.id,
+                        title: (data['title'] ?? '') as String,
+                        time: (data['time'] ?? '') as String,
+                        isCompleted: (data['isCompleted'] ?? false) as bool,
+                      );
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: _ReminderCard(
+                          icon: Icons.notifications_outlined,
+                          time: reminder.time,
+                          title: reminder.title,
+                          isCompleted: reminder.isCompleted,
+                          onTap: () async => _toggleReminder(reminder.id, reminder.isCompleted),
+                          onDelete: () async => _deleteReminder(reminder.id),
+                        ),
+                      );
+                    }).toList(),
+                  );
+                },
+              ),
               _AddReminderButton(
                 onTap: () => _showAddReminderDialog(context),
               ),
@@ -213,36 +459,42 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildDailyOverview(BuildContext context, bool isTablet, bool isDesktop) {
-    if (isDesktop) {
-      // Desktop: 3 columns
-      return Row(
-        children: const [
-          Expanded(child: _GaugeCard(title: 'Calories', value: 3480, unit: 'Kcal', icon: Icons.local_fire_department_outlined)),
-          SizedBox(width: 16),
-          Expanded(child: _GaugeCard(title: 'carb', value: 3480, unit: 'Kcal', icon: Icons.restaurant_outlined)),
-          SizedBox(width: 16),
-          Expanded(child: _GaugeCard(title: 'Protein', value: 120, unit: 'g', icon: Icons.fitness_center_outlined)),
-        ],
-      );
-    } else if (isTablet) {
-      // Tablet: 2 columns
-      return Row(
-        children: const [
-          Expanded(child: _GaugeCard(title: 'Calories', value: 3480, unit: 'Kcal', icon: Icons.local_fire_department_outlined)),
-          SizedBox(width: 16),
-          Expanded(child: _GaugeCard(title: 'carb', value: 3480, unit: 'Kcal', icon: Icons.restaurant_outlined)),
-        ],
-      );
-    } else {
-      // Mobile: 2 columns
-      return Row(
-        children: const [
-          Expanded(child: _GaugeCard(title: 'Calories', value: 3480, unit: 'Kcal', icon: Icons.local_fire_department_outlined)),
-          SizedBox(width: 12),
-          Expanded(child: _GaugeCard(title: 'carb', value: 3480, unit: 'Kcal', icon: Icons.restaurant_outlined)),
-        ],
-      );
-    }
+    const goalCalories = 2000; // TODO: fetch from user profile if available
+    const goalCarbs = 250.0;   // grams; TODO: fetch from user profile if available
+    return StreamBuilder<Map<String, dynamic>>(
+      stream: UserDataService.instance.streamSummary(),
+      builder: (context, snapshot) {
+        final calories = (snapshot.data?['calories'] as num?)?.toInt() ?? 0;
+        final carbs = (snapshot.data?['carbs'] as num?)?.toDouble() ?? 0.0;
+        if (isDesktop) {
+          return Row(
+            children: [
+              Expanded(child: _GaugeCard(title: 'Calories', value: calories, unit: 'Kcal', icon: Icons.local_fire_department_outlined, goal: goalCalories, onTap: _showTodayMeals)),
+              const SizedBox(width: 16),
+              Expanded(child: _GaugeCard(title: 'Carbs', value: carbs, unit: 'g', icon: Icons.restaurant_outlined, goal: goalCarbs, onTap: _showTodayMeals)),
+              const SizedBox(width: 16),
+              Expanded(child: _GaugeCard(title: 'Protein', value: 120, unit: 'g', icon: Icons.fitness_center_outlined, onTap: _showTodayMeals)),
+            ],
+          );
+        } else if (isTablet) {
+          return Row(
+            children: [
+              Expanded(child: _GaugeCard(title: 'Calories', value: calories, unit: 'Kcal', icon: Icons.local_fire_department_outlined, goal: goalCalories, onTap: _showTodayMeals)),
+              const SizedBox(width: 16),
+              Expanded(child: _GaugeCard(title: 'Carbs', value: carbs, unit: 'g', icon: Icons.restaurant_outlined, goal: goalCarbs, onTap: _showTodayMeals)),
+            ],
+          );
+        } else {
+          return Row(
+            children: [
+              Expanded(child: _GaugeCard(title: 'Calories', value: calories, unit: 'Kcal', icon: Icons.local_fire_department_outlined, goal: goalCalories, onTap: _showTodayMeals)),
+              const SizedBox(width: 12),
+              Expanded(child: _GaugeCard(title: 'Carbs', value: carbs, unit: 'g', icon: Icons.restaurant_outlined, goal: goalCarbs, onTap: _showTodayMeals)),
+            ],
+          );
+        }
+      },
+    );
   }
 
   Widget _buildQuickActions(BuildContext context, bool isTablet, bool isDesktop) {
@@ -323,6 +575,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _riskCard(BuildContext context, {required double percent, required bool isTablet}) {
+    final pctText = (percent * 100).round();
     return Container(
       padding: EdgeInsets.all(isTablet ? 24 : 16),
       decoration: BoxDecoration(
@@ -343,7 +596,7 @@ class _HomeScreenState extends State<HomeScreen> {
           CircularPercentIndicator(
             radius: isTablet ? 60 : 43,
             lineWidth: isTablet ? 12 : 10,
-            percent: percent,
+            percent: percent.clamp(0.0, 1.0),
             backgroundColor: Colors.white.withOpacity(0.15),
             progressColor: const Color(0xFF7ED957),
             circularStrokeCap: CircularStrokeCap.round,
@@ -353,7 +606,7 @@ class _HomeScreenState extends State<HomeScreen> {
               decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
               alignment: Alignment.center,
               child: Text(
-                '63%',
+                '$pctText%',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontWeight: FontWeight.w700,
@@ -376,10 +629,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
 class _GaugeCard extends StatelessWidget {
   final String title;
-  final int value;
+  final num value;
   final String unit;
   final IconData icon;
-  const _GaugeCard({required this.title, required this.value, required this.unit, required this.icon});
+  final num? goal;
+  final VoidCallback? onTap;
+  const _GaugeCard({required this.title, required this.value, required this.unit, required this.icon, this.goal, this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -393,7 +648,9 @@ class _GaugeCard extends StatelessWidget {
     final valueFontSize = isDesktop ? 20 : (isTablet ? 19 : 18);
     final unitFontSize = isDesktop ? 12 : (isTablet ? 11 : 10);
     
-    return Container(
+    return InkWell(
+      onTap: onTap,
+      child: Container(
       padding: EdgeInsets.all(isTablet ? 20 : 16),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -415,7 +672,12 @@ class _GaugeCard extends StatelessWidget {
             child: CircularPercentIndicator(
               radius: radius.toDouble(),
               lineWidth: isTablet ? 10 : 8,
-              percent: 0.75, // 75% progress as shown in image
+              percent: (() {
+                final g = goal ?? 0;
+                if (g == 0) return 0.0;
+                final p = (value.toDouble() / g.toDouble()).clamp(0.0, 1.0);
+                return p;
+              })(),
               backgroundColor: Colors.green.shade100,
               progressColor: const Color(0xFF7ED957),
               circularStrokeCap: CircularStrokeCap.round,
@@ -431,7 +693,7 @@ class _GaugeCard extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    '$value',
+                    value is int ? '${value as int}' : value.toStringAsFixed(0),
                     style: TextStyle(
                       fontWeight: FontWeight.w800,
                       color: const Color(0xFF2E86DE),
@@ -452,7 +714,7 @@ class _GaugeCard extends StatelessWidget {
           ),
         ],
       ),
-    );
+    ));
   }
 }
 

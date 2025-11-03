@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../data/models.dart';
+import '../../services/user_data_service.dart';
 import '../../config/theme.dart';
 import 'meal_detail_screen.dart';
 
@@ -528,7 +529,29 @@ class _MealsScreenState extends State<MealsScreen> {
                         const SizedBox(height: 4),
                         _buildMealTypeTag(meal.type),
                         const SizedBox(height: 8),
-                        _buildNutritionInfo(meal, isCompact: true),
+                        Row(
+                          children: [
+                            Expanded(child: _buildNutritionInfo(meal, isCompact: true)),
+                            IconButton(
+                              tooltip: 'Ate today',
+                              icon: const Icon(Icons.add_circle_outline),
+                              onPressed: () async {
+                                await UserDataService.instance.addMealLog(meal: {
+                                  'mealId': meal.id,
+                                  'name': meal.name,
+                                  'calories': meal.calories,
+                                  'carbs': meal.carbs,
+                                  'sugar': meal.sugar,
+                                  'type': meal.type.name,
+                                });
+                                if (!mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text("Added to today's overview")),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
                       ],
                     ),
                   ],

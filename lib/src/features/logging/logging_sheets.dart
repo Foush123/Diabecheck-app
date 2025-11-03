@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 Future<void> showSugarLogSheet(BuildContext context) async {
   final controller = TextEditingController();
@@ -79,7 +81,33 @@ Future<void> showSugarLogSheet(BuildContext context) async {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: () => Navigator.pop(context, controller.text),
+                  onPressed: () async {
+                    final user = FirebaseAuth.instance.currentUser;
+                    if (user == null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Please log in to save logs.')),
+                      );
+                      return;
+                    }
+                    final value = double.tryParse(controller.text.trim());
+                    if (value == null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Enter a valid number.')),
+                      );
+                      return;
+                    }
+                    await FirebaseFirestore.instance
+                        .collection('users')
+                        .doc(user.uid)
+                        .collection('logs')
+                        .doc('sugar')
+                        .collection('entries')
+                        .add({
+                      'valueMgdl': value,
+                      'createdAt': FieldValue.serverTimestamp(),
+                    });
+                    if (context.mounted) Navigator.pop(context);
+                  },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.red.shade600,
                     foregroundColor: Colors.white,
@@ -177,7 +205,33 @@ Future<void> showCaloriesLogSheet(BuildContext context) async {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: () => Navigator.pop(context, controller.text),
+                  onPressed: () async {
+                    final user = FirebaseAuth.instance.currentUser;
+                    if (user == null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Please log in to save logs.')),
+                      );
+                      return;
+                    }
+                    final value = double.tryParse(controller.text.trim());
+                    if (value == null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Enter a valid number.')),
+                      );
+                      return;
+                    }
+                    await FirebaseFirestore.instance
+                        .collection('users')
+                        .doc(user.uid)
+                        .collection('logs')
+                        .doc('calories')
+                        .collection('entries')
+                        .add({
+                      'kcal': value,
+                      'createdAt': FieldValue.serverTimestamp(),
+                    });
+                    if (context.mounted) Navigator.pop(context);
+                  },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.orange.shade600,
                     foregroundColor: Colors.white,
@@ -275,7 +329,33 @@ Future<void> showWaterLogSheet(BuildContext context) async {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: () => Navigator.pop(context, controller.text),
+                  onPressed: () async {
+                    final user = FirebaseAuth.instance.currentUser;
+                    if (user == null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Please log in to save logs.')),
+                      );
+                      return;
+                    }
+                    final value = double.tryParse(controller.text.trim());
+                    if (value == null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Enter a valid number.')),
+                      );
+                      return;
+                    }
+                    await FirebaseFirestore.instance
+                        .collection('users')
+                        .doc(user.uid)
+                        .collection('logs')
+                        .doc('water')
+                        .collection('entries')
+                        .add({
+                      'cups': value,
+                      'createdAt': FieldValue.serverTimestamp(),
+                    });
+                    if (context.mounted) Navigator.pop(context);
+                  },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.blue.shade600,
                     foregroundColor: Colors.white,

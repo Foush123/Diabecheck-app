@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../shell/shell_screen.dart';
 import '../../data/health_questionnaire_model.dart';
 
@@ -224,8 +226,13 @@ class _HealthQuestionnaireScreenState extends State<HealthQuestionnaireScreen> {
     }
   }
 
-  void _submitQuestionnaire() {
+  Future<void> _submitQuestionnaire() async {
     if (_formKey.currentState?.validate() ?? false) {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        _showValidationError('You must be logged in to submit.');
+        return;
+      }
       // Create the health questionnaire data model
       final questionnaire = HealthQuestionnaire(
         age: int.parse(_ageController.text),
@@ -277,9 +284,9 @@ class _HealthQuestionnaireScreenState extends State<HealthQuestionnaireScreen> {
             child: const Text('Edit'),
           ),
           ElevatedButton(
-            onPressed: () {
+            onPressed: () async {
               Navigator.of(context).pop();
-              _completeSignup(questionnaire);
+              await _completeSignup(questionnaire);
             },
             child: const Text('Complete Signup'),
           ),
@@ -301,14 +308,34 @@ class _HealthQuestionnaireScreenState extends State<HealthQuestionnaireScreen> {
     );
   }
 
-  void _completeSignup(HealthQuestionnaire questionnaire) {
-    // Here you would typically save the questionnaire data to a database or API
-    print('Health Questionnaire Data: ${questionnaire.toMap()}');
-    print('BMI: ${questionnaire.bmi.toStringAsFixed(1)} (${questionnaire.bmiCategory})');
-    print('Physical Activity Level: ${questionnaire.physicalActivityLevel}');
-    print('Diabetes Risk Score: ${questionnaire.diabetesRiskScore}/10 (${questionnaire.diabetesRiskLevel})');
-    
-    Navigator.of(context).pushReplacementNamed(ShellScreen.routeName);
+  Future<void> _completeSignup(HealthQuestionnaire questionnaire) async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        _showValidationError('Please log in to submit.');
+        return;
+      }
+      final docRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('profiles')
+          .doc('health_questionnaire');
+
+      await docRef.set({
+        ...questionnaire.toMap(),
+        'bmi': questionnaire.bmi,
+        'bmiCategory': questionnaire.bmiCategory,
+        'physicalActivityLevel': questionnaire.physicalActivityLevel,
+        'diabetesRiskScore': questionnaire.diabetesRiskScore,
+        'diabetesRiskLevel': questionnaire.diabetesRiskLevel,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      if (!mounted) return;
+      Navigator.of(context).pushReplacementNamed(ShellScreen.routeName);
+    } catch (e) {
+      _showValidationError('Failed to save data: $e');
+    }
   }
 
   @override
